@@ -64,6 +64,15 @@ service cloud.firestore {
         allow read: if isOwner(userId) || isAdmin();
         allow create: if isOwner(userId) && isValidChat(request.resource.data);
       }
+
+      match /generations/{genId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && 
+                      request.resource.data.keys().hasAll(['tool', 'content', 'timestamp']) &&
+                      request.resource.data.tool is string &&
+                      request.resource.data.content is string &&
+                      request.resource.data.timestamp is timestamp;
+      }
     }
   }
 }

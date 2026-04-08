@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Component, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Home,
@@ -29,8 +29,33 @@ import {
   AlertTriangle,
   Info,
   Send,
-  Bot
+  Bot,
+  Download,
+  Save,
+  Bold,
+  Italic,
+  Underline,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  List,
+  ListOrdered,
+  Type,
+  Pencil,
+  Image as ImageIcon,
+  Link as LinkIcon,
+  Code,
+  Quote,
+  MoreHorizontal,
+  Star,
+  Zap,
+  Lightbulb,
+  Languages,
+  ShieldCheck,
+  Share2
 } from 'lucide-react';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
 import { auth, signInWithGoogle, logout, db } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { 
@@ -43,7 +68,8 @@ import {
   orderBy, 
   onSnapshot, 
   serverTimestamp,
-  getDocFromServer
+  getDocFromServer,
+  deleteDoc
 } from 'firebase/firestore';
 import { sendMessage as sendGeminiMessage } from './services/geminiService';
 
@@ -56,46 +82,63 @@ enum OperationType {
   WRITE = 'write',
 }
 
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
+function safeStringify(obj: any) {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (key, value) => {
+    // Handle Error objects specifically as their properties are often non-enumerable
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      };
+    }
+    // Handle circular references using the suggested WeakSet pattern
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  });
 }
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
+  const errInfo = {
+    error: error instanceof Error ? { message: error.message, name: error.name } : error,
     operationType,
-    path
+    path: path || 'unknown',
+    userId: auth.currentUser?.uid || 'anonymous',
+    email: auth.currentUser?.email || 'anonymous',
+    timestamp: new Date().toISOString()
+  };
+
+  const errString = safeStringify(errInfo);
+  console.error('Firestore Error:', errString);
+  throw new Error(errString);
+}
+
+class EditorErrorBoundary extends Component<any, any> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Editor Error Caught:", safeStringify({ error, errorInfo }));
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+          <h2 className="text-xl font-bold text-red-500">Terjadi error editor</h2>
+        </div>
+      );
+    }
+
+    return (this as any).props.children;
+  }
 }
 
 export default function App() {
@@ -129,9 +172,62 @@ export default function App() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [selectedTool, setSelectedTool] = useState<any>(null);
   const [toolInput, setToolInput] = useState('');
-  const [toolOutput, setToolOutput] = useState('');
+  const [content, setContent] = useState("");
+  const quillRef = useRef<any>(null);
+
+  // Load data saat aplikasi dibuka
+  useEffect(() => {
+    const saved = localStorage.getItem("my_document");
+    if (saved) {
+      setContent(saved);
+    }
+  }, []);
+
+  // Simpan otomatis ke localStorage
+  useEffect(() => {
+    localStorage.setItem("my_document", content);
+  }, [content]);
+
   const [isToolLoading, setIsToolLoading] = useState(false);
-  const scrollRef = useState<HTMLDivElement | null>(null)[0];
+
+  const editorModules = useMemo(() => ({
+    toolbar: [
+      [{ 'header': [1, 2, 3, false] }],
+      ['bold', 'italic', 'underline', 'strike'],
+      [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+      [{ 'color': [] }, { 'background': [] }],
+      ['link', 'image', 'code-block'],
+      ['clean']
+    ]
+  }), []);
+
+  // Export ke txt
+  const exportText = () => {
+    const text = content.replace(/<[^>]*>/g, "");
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = "dokumen.txt";
+    a.click();
+
+    URL.revokeObjectURL(url);
+  };
+
+  // Tool Config State
+  const [toolLanguage, setToolLanguage] = useState('Bahasa Indonesia');
+  const [numIdeas, setNumIdeas] = useState(5);
+  const [writingType, setWritingType] = useState('Makalah');
+  const [creativity, setCreativity] = useState('Asli');
+  const [tone, setTone] = useState('Professional');
+  const [numResults, setNumResults] = useState(1);
+  const [maxResultLength, setMaxResultLength] = useState(1500);
+  const [aiModel, setAiModel] = useState('Premium');
+
+  // Document State
+  const [docName, setDocName] = useState('Dokumen Baru');
+  const [workbook, setWorkbook] = useState('Semua Workbook');
 
   const cleanText = (text: string) => {
     return text
@@ -224,29 +320,60 @@ export default function App() {
     if (!toolInput.trim() || !user || isToolLoading || !selectedTool) return;
 
     setIsToolLoading(true);
-    setToolOutput('');
+    setContent('');
 
     try {
-      const prompt = `Sebagai asisten akademik BimTEKs.ID, bantu saya dengan tool "${selectedTool.title}". Input pengguna: ${toolInput}. Berikan jawaban yang sangat bersih, profesional, tanpa karakter markdown seperti #, *, -, atau $.`;
+      const prompt = `Sebagai asisten akademik BimTEKs.ID, bantu saya dengan tool "${selectedTool.title}". 
+      Bahasa: ${toolLanguage}
+      Jumlah Ide: ${numIdeas}
+      Jenis Karya Tulis: ${writingType}
+      Topik atau Tema: ${toolInput}
+      Model AI: ${aiModel}
+      Kreativitas: ${creativity}
+      Nada Tulisan: ${tone}
+      Jumlah Hasil: ${numResults}
+      Panjang Hasil Maks: ${maxResultLength}
+      
+      Berikan jawaban yang sangat bersih, profesional, tanpa karakter markdown seperti #, *, -, atau $.`;
+      
       const response = await sendGeminiMessage(prompt, []);
       const cleanedResponse = cleanText(response || '');
-      setToolOutput(cleanedResponse);
+      setContent(cleanedResponse);
 
       // Save to history
+      const genPath = `users/${user.uid}/generations`;
       await addDoc(collection(db, 'users', user.uid, 'generations'), {
         tool: selectedTool.title,
         content: cleanedResponse,
         timestamp: serverTimestamp()
       });
     } catch (error) {
-      console.error("Generation error:", error);
+      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/generations`);
     } finally {
       setIsToolLoading(false);
     }
   };
+
+  const handleDeleteGeneration = async (id: string) => {
+    if (!user) return;
+    const path = `users/${user.uid}/generations/${id}`;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'generations', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  };
+
   const [activeTab, setActiveTab] = useState('Home');
+  const [academicMode, setAcademicMode] = useState(true);
+  const [plagiarism, setPlagiarism] = useState(true);
+  const [interdisciplinary, setInterdisciplinary] = useState(true);
 
   useEffect(() => {
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         const userRef = doc(db, 'users', currentUser.uid);
@@ -265,7 +392,7 @@ export default function App() {
             });
           }
         } catch (error) {
-          console.error("Error syncing user:", error);
+          console.error("Error syncing user:", error instanceof Error ? error.message : String(error));
         }
         setUser(currentUser);
       } else {
@@ -281,7 +408,7 @@ export default function App() {
     try {
       await signInWithGoogle();
     } catch (error) {
-      console.error("Login failed", error);
+      console.error("Login failed", error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -289,7 +416,7 @@ export default function App() {
     try {
       await logout();
     } catch (error) {
-      console.error("Logout failed", error);
+      console.error("Logout failed", error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -428,7 +555,7 @@ export default function App() {
   const panelMenuItems = [
     { id: 'Home', icon: Home, label: 'Home' },
     { id: 'Akademik', icon: GraduationCap, label: 'Akademik' },
-    { id: 'Chatbot', icon: MessageSquare, label: 'Chatbot' },
+    { id: 'Chatbot', icon: MessageSquare, label: 'Chatbot Akademik' },
     { id: 'Riwayat', icon: History, label: 'Riwayat Hasil' },
   ];
 
@@ -439,22 +566,86 @@ export default function App() {
   ];
 
   const aiTools = [
-    { title: 'Ide Karya Tulis', desc: 'Dapatkan ide karya tulis seperti essay, tesis, paper, jurnal, makalah, disertasi, artikel ilmiah untuk topik apapun.', icon: Sparkles },
-    { title: 'Ide Karya Tulis dari Referensi', desc: 'Membuat ide karya tulis berdasarkan beberapa referensi valid dari berbagai sumber.', icon: Search },
-    { title: 'Buat Makalah', desc: 'Buat makalah dengan topik atau tema apapun yang memberi kesan hasil riset yang baik dan ditulis oleh ahlinya.', icon: FileText },
-    { title: 'Kerangka Berpikir', desc: 'Membantu menjelaskan teori atau konsep yang mendasari penelitian dan bagaimana variabel-variabel tersebut saling berhubungan.', icon: BarChart3 },
-    { title: 'Buat Proposal Penelitian', desc: 'Buat proposal penelitian yang meyakinkan dan metodologis yang kokoh yang mengatasi kesenjangan atau isu signifikan dalam suatu bidang studi tertentu.', icon: GraduationCap },
-    { title: 'Buat Skripsi', desc: 'Buat skripsi akademik berkualitas tinggi yang memberikan wawasan berharga kepada bidang studi tertentu.', icon: GraduationCap },
-    { title: 'Sempurnakan Karya Tulis', desc: 'Sempurnakan karya tulis dari segi tata bahasa, ejaan, typo, struktur kalimat, pemilihan kalimat, dan sebagainya.', icon: MessageSquare },
-    { title: 'Buat Essay', desc: 'Buat Essay dengan topik atau tema apapun yang memberi kesan hasil riset yang baik dan ditulis oleh ahlinya.', icon: FileText },
-    { title: 'Kuesioner/Survey Kuantitatif', desc: 'Kembangkan survey/kuesioner untuk mengumpulkan data tentang topik/variabel apapun di konteks apapun.', icon: BarChart3 },
-    { title: 'Panduan Wawancara Kualitatif', desc: 'Rancang panduan wawancara untuk mengeksplorasi topik/pertanyaan apapun untuk kepentingan penelitian.', icon: MessageSquare },
-    { title: 'Buat Slide Presentasi PPT', desc: 'Membuat konten slide presentasi PPT beserta saran visual dan skrip pembicara. Tool ini hanya menggenerate teks.', icon: Maximize2 },
-    { title: 'Penyusun Paragraf Otomatis', desc: 'Alat yang mengembangkan kata kunci menjadi paragraf terstruktur dengan gaya penulisan yang konsisten.', icon: FileText },
-    { title: 'Review Jurnal', desc: 'Menulis review jurnal dengan merangkum, menganalisis, dan memberikan tinjauan kritis terhadap jurnal ilmiah dengan cepat dan efisien.', icon: Globe },
-    { title: 'Analisa Karya Tulis', desc: 'Menganalisa dan mengoreksi suatu karya tulis seakan dinilai oleh dosen penguji.', icon: Search },
-    { title: 'Perbaiki Karya Tulis', desc: 'Buat karya essay Anda atau karya tulis apapun terlihat lebih intelek dan berisi, dengan susunan kalimat dan tata bahasa yang baik dan pemilihan kalimat yang lebih elegan.', icon: Sparkles },
-    { title: 'Cek Plagiarisme', desc: 'Deteksi tingkat kemiripan teks Anda dengan sumber internet dan database akademik untuk menjaga orisinalitas karya.', icon: History },
+    { 
+      title: 'Ide Karya Tulis', 
+      desc: 'Dapatkan ide karya tulis seperti essay, tesis, paper, jurnal, makalah, disertasi, artikel ilmiah untuk topik apapun.', 
+      icon: Lightbulb 
+    },
+    { 
+      title: 'Ide Karya Tulis dari Referensi', 
+      desc: 'Membuat ide karya tulis berdasarkan beberapa referensi valid dari berbagai sumber. Masukkan abstrak atau judul referensi, dan AI akan mensintesis ide baru yang orisinal.', 
+      icon: Search 
+    },
+    { 
+      title: 'Buat Makalah', 
+      desc: 'Buat makalah dengan topik atau tema apapun yang memberi kesan hasil riset yang baik dan ditulis oleh ahlinya. Lengkap dengan pendahuluan, pembahasan sistematis, dan kesimpulan.', 
+      icon: FileText 
+    },
+    { 
+      title: 'Kerangka Berpikir', 
+      desc: 'Membantu menjelaskan teori atau konsep yang mendasari penelitian dan bagaimana variabel-variabel tersebut saling berhubungan dalam bentuk narasi logis yang kuat.', 
+      icon: BarChart3 
+    },
+    { 
+      title: 'Buat Proposal Penelitian', 
+      desc: 'Buat proposal penelitian yang meyakinkan dan metodologis yang kokoh yang mengatasi kesenjangan atau isu signifikan dalam suatu bidang studi tertentu, mencakup latar belakang hingga metode.', 
+      icon: GraduationCap 
+    },
+    { 
+      title: 'Buat Skripsi', 
+      desc: 'Buat skripsi akademik berkualitas tinggi yang memberikan wawasan berharga kepada bidang studi tertentu. Membantu menyusun bab demi bab dengan standar akademik yang ketat.', 
+      icon: GraduationCap 
+    },
+    { 
+      title: 'Sempurnakan Karya Tulis', 
+      desc: 'Sempurnakan karya tulis dari segi tata bahasa, ejaan, typo, struktur kalimat, pemilihan kalimat, dan koherensi antar paragraf agar terlihat lebih profesional.', 
+      icon: MessageSquare 
+    },
+    { 
+      title: 'Buat Essay', 
+      desc: 'Buat Essay dengan topik atau tema apapun yang memberi kesan hasil riset yang baik dan ditulis oleh ahlinya. Fokus pada argumen yang tajam dan alur pemikiran yang mengalir.', 
+      icon: FileText 
+    },
+    { 
+      title: 'Kuesioner/Survey Kuantitatif', 
+      desc: 'Kembangkan survey/kuesioner untuk mengumpulkan data tentang topik/variabel apapun di konteks apapun, lengkap dengan skala pengukuran yang sesuai (misal: Likert).', 
+      icon: BarChart3 
+    },
+    { 
+      title: 'Panduan Wawancara Kualitatif', 
+      desc: 'Rancang panduan wawancara untuk mengeksplorasi topik/pertanyaan apapun untuk kepentingan penelitian kualitatif, mencakup pertanyaan pembuka, inti, dan penutup.', 
+      icon: MessageSquare 
+    },
+    { 
+      title: 'Buat Slide Presentasi PPT', 
+      desc: 'Membuat konten slide presentasi PPT beserta saran visual dan skrip pembicara. AI akan menyusun poin-poin kunci per slide agar presentasi Anda efektif dan menarik.', 
+      icon: Maximize2 
+    },
+    { 
+      title: 'Penyusun Paragraf Otomatis', 
+      desc: 'Alat yang mengembangkan kata kunci menjadi paragraf terstruktur dengan gaya penulisan yang konsisten, membantu mengatasi writer\'s block dengan cepat.', 
+      icon: FileText 
+    },
+    { 
+      title: 'Review Jurnal', 
+      desc: 'Menulis review jurnal dengan merangkum, menganalisis, dan memberikan tinjauan kritis terhadap jurnal ilmiah dengan cepat dan efisien sesuai standar publikasi.', 
+      icon: Globe 
+    },
+    { 
+      title: 'Analisa Karya Tulis', 
+      desc: 'Menganalisa dan mengoreksi suatu karya tulis seakan dinilai oleh dosen penguji, memberikan feedback konstruktif pada kekuatan dan kelemahan argumen.', 
+      icon: Search 
+    },
+    { 
+      title: 'Perbaiki Karya Tulis', 
+      desc: 'Buat karya essay Anda atau karya tulis apapun terlihat lebih intelek dan berisi, dengan susunan kalimat yang lebih elegan dan pemilihan diksi akademik yang tepat.', 
+      icon: Sparkles 
+    },
+    { 
+      title: 'Cek Plagiarisme', 
+      desc: 'Deteksi tingkat kemiripan teks Anda dengan sumber internet dan database akademik untuk menjaga orisinalitas karya serta memberikan saran sitasi yang benar.', 
+      icon: History 
+    },
   ];
 
   return (
@@ -724,95 +915,397 @@ export default function App() {
               </div>
             </div>
           ) : activeTab === 'Akademik' ? (
-            <div className="p-8 max-w-7xl mx-auto">
-              <div className="mb-8">
-                <h1 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Akademik</h1>
-                <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
-                  <Home size={12} />
-                  <span>Panel AI</span>
-                  <ChevronRight size={12} />
-                  <span className="text-blue-600">Akademik</span>
+            <div className={`h-full flex flex-col ${selectedTool ? '' : 'p-8 max-w-7xl mx-auto w-full'}`}>
+              {!selectedTool && (
+                <div className="mb-8">
+                  <h1 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Akademik</h1>
+                  <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                    <Home size={12} />
+                    <span>Panel AI</span>
+                    <ChevronRight size={12} />
+                    <span className="text-blue-600">Akademik</span>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {selectedTool ? (
-                <div className={`rounded-2xl border p-8 ${
-                  theme === 'dark' ? 'bg-[#111111] border-gray-800' : 'bg-white border-gray-100 shadow-sm'
+                <div className={`flex flex-col lg:flex-row gap-6 h-full overflow-hidden p-6 ${
+                  theme === 'dark' ? 'bg-[#0A0A0A]' : 'bg-[#F8F9FA]'
                 }`}>
-                  <button 
-                    onClick={() => {
-                      setSelectedTool(null);
-                      setToolInput('');
-                      setToolOutput('');
-                    }}
-                    className="flex items-center gap-2 text-blue-600 font-bold text-sm mb-6 hover:gap-3 transition-all"
-                  >
-                    <ChevronRight size={16} className="rotate-180" />
-                    Kembali ke Daftar Tools
-                  </button>
-                  
-                  <div className="flex items-center gap-4 mb-8">
-                    <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center text-white">
-                      <selectedTool.icon size={28} />
+                  {/* Left Sidebar - Configuration */}
+                  <div className={`lg:w-[350px] flex flex-col gap-6 overflow-y-auto pr-2 custom-scrollbar p-6 rounded-2xl border ${
+                    theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-300' : 'bg-white border-gray-200 text-gray-700 shadow-sm'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <button 
+                        onClick={() => {
+                          setSelectedTool(null);
+                          setToolInput('');
+                          setContent('');
+                        }}
+                        className="flex items-center gap-2 text-blue-600 font-bold text-sm hover:gap-3 transition-all"
+                      >
+                        <ChevronRight size={16} className="rotate-180" />
+                        Kembali
+                      </button>
+                      <Sparkles size={20} className="text-yellow-400" />
                     </div>
-                    <div>
-                      <h2 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{selectedTool.title}</h2>
-                      <p className="text-sm text-gray-500">{selectedTool.desc}</p>
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="text-yellow-400">
+                          {React.createElement(selectedTool.icon, { size: 24 })}
+                        </div>
+                        <h2 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{selectedTool.title}</h2>
+                        <span className="bg-black text-white text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1">
+                          <Sparkles size={10} className="text-yellow-400" />
+                          Gratis
+                        </span>
+                      </div>
+                      <button className="text-gray-400 hover:text-yellow-400 transition-colors">
+                        <Star size={20} />
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      {selectedTool.desc}
+                    </p>
+
+                    <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl flex items-center gap-3 border border-blue-100 dark:border-blue-800">
+                      <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                        <Zap size={16} />
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Kuota Anda = 2.2K Kata</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      {/* Bahasa */}
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">Bahasa</label>
+                        <div className="relative">
+                          <select 
+                            value={toolLanguage}
+                            onChange={(e) => setToolLanguage(e.target.value)}
+                            className={`w-full p-3 rounded-xl border text-sm appearance-none pr-10 ${
+                              theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                            }`}
+                          >
+                            <option value="Bahasa Indonesia">Indonesian (Indonesia)</option>
+                            <option value="Bahasa Inggris">English (United States)</option>
+                          </select>
+                          <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none flex items-center gap-2">
+                            <span className="text-lg">{toolLanguage === 'Bahasa Indonesia' ? '🇮🇩' : '🇺🇸'}</span>
+                          </div>
+                          <ChevronRight size={16} className="absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-gray-400 pointer-events-none" />
+                        </div>
+                      </div>
+
+                      {/* Jumlah Ide */}
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">Jumlah Ide</label>
+                        <input 
+                          type="text"
+                          value={numIdeas || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === '' || /^\d+$/.test(val)) {
+                              setNumIdeas(val === '' ? 0 : Number(val));
+                            }
+                          }}
+                          placeholder="Butuh berapa ide? max 10"
+                          className={`w-full p-3 rounded-xl border text-sm ${
+                            theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white placeholder-gray-600' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
+                          }`}
+                        />
+                      </div>
+
+                      {/* Jenis Karya Tulis */}
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">Jenis Karya Tulis</label>
+                        <input 
+                          type="text"
+                          value={writingType}
+                          onChange={(e) => setWritingType(e.target.value)}
+                          placeholder="essay, tesis, jurnal, makalah, paper, artikel ilmiah, disetasi etc"
+                          className={`w-full p-3 rounded-xl border text-sm ${
+                            theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white placeholder-gray-600' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
+                          }`}
+                        />
+                      </div>
+
+                      {/* Topik atau Tema */}
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">
+                          {selectedTool.title === 'Ide Karya Tulis dari Referensi' ? 'Referensi (Judul/Abstrak)' : 'Topik atau Tema'}
+                        </label>
+                        <div className="relative">
+                          <textarea 
+                            value={toolInput}
+                            onChange={(e) => setToolInput(e.target.value)}
+                            placeholder={selectedTool.title === 'Ide Karya Tulis dari Referensi' ? 'Masukkan judul atau abstrak referensi...' : 'Masukkan lingkup topik atau tema'}
+                            className={`w-full p-3 rounded-xl border text-sm min-h-[100px] pr-10 ${
+                              theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                            }`}
+                          />
+                          {toolInput && (
+                            <button 
+                              onClick={() => setToolInput('')}
+                              className="absolute right-3 top-3 text-gray-400 hover:text-red-500 transition-colors"
+                              title="Hapus referensi"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Model AI */}
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">Model AI</label>
+                        <div className="relative">
+                          <select 
+                            value={aiModel}
+                            onChange={(e) => setAiModel(e.target.value)}
+                            className={`w-full p-3 rounded-xl border text-sm appearance-none pr-10 ${
+                              theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                            }`}
+                          >
+                            <option value="Premium">Premium</option>
+                            <option value="Standard">Standard</option>
+                          </select>
+                          <ChevronRight size={16} className="absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-gray-400 pointer-events-none" />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Kreativitas */}
+                        <div>
+                          <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">
+                            Kreativitas
+                            <Info size={10} className="text-gray-400" />
+                          </label>
+                          <div className="relative">
+                            <select 
+                              value={creativity}
+                              onChange={(e) => setCreativity(e.target.value)}
+                              className={`w-full p-3 rounded-xl border text-sm appearance-none pr-10 ${
+                                theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                              }`}
+                            >
+                              <option>Asli</option>
+                              <option>Kreatif</option>
+                              <option>Sangat Kreatif</option>
+                            </select>
+                            <ChevronRight size={14} className="absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-gray-400 pointer-events-none" />
+                          </div>
+                        </div>
+
+                        {/* Nada Tulisan */}
+                        <div>
+                          <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">
+                            Nada Tulisan
+                            <Info size={10} className="text-gray-400" />
+                          </label>
+                          <div className="relative">
+                            <select 
+                              value={tone}
+                              onChange={(e) => setTone(e.target.value)}
+                              className={`w-full p-3 rounded-xl border text-sm appearance-none pr-10 ${
+                                theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                              }`}
+                            >
+                              <option>Professional</option>
+                              <option>Akademik</option>
+                              <option>Formal</option>
+                              <option>Casual</option>
+                            </select>
+                            <ChevronRight size={14} className="absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-gray-400 pointer-events-none" />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Jumlah Hasil */}
+                        <div>
+                          <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">
+                            Jumlah Hasil
+                            <Info size={10} className="text-gray-400" />
+                          </label>
+                          <input 
+                            type="text"
+                            value={numResults || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === '' || /^\d+$/.test(val)) {
+                                setNumResults(val === '' ? 0 : Number(val));
+                              }
+                            }}
+                            className={`w-full p-3 rounded-xl border text-sm ${
+                              theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                            }`}
+                          />
+                        </div>
+
+                        {/* Panjang Hasil Maks */}
+                        <div>
+                          <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-2 opacity-70">
+                            Panjang Hasil Maks
+                            <Info size={10} className="text-gray-400" />
+                          </label>
+                          <input 
+                            type="text"
+                            value={maxResultLength || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === '' || /^\d+$/.test(val)) {
+                                setMaxResultLength(val === '' ? 0 : Number(val));
+                              }
+                            }}
+                            className={`w-full p-3 rounded-xl border text-sm ${
+                              theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <button 
+                      onClick={handleGenerateTool}
+                      disabled={!toolInput.trim() || isToolLoading}
+                      className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2 mt-4"
+                    >
+                      {isToolLoading ? 'Sedang Memproses...' : 'Hasilkan'}
+                      {!isToolLoading && <Sparkles size={18} />}
+                    </button>
+                  </div>
+
+                  {/* Right Content - Editor/Output */}
+                  <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+                    <div className="flex items-center justify-between gap-4">
+                      <input 
+                        type="text"
+                        value={docName}
+                        onChange={(e) => setDocName(e.target.value)}
+                        className={`flex-1 p-3 rounded-xl border text-sm font-medium focus:ring-2 focus:ring-blue-100 transition-all ${
+                          theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                        }`}
+                      />
+                      <div className="relative">
+                        <select 
+                          value={workbook}
+                          onChange={(e) => setWorkbook(e.target.value)}
+                          className={`p-3 pr-10 rounded-xl border text-sm font-medium appearance-none ${
+                            theme === 'dark' ? 'bg-[#111111] border-gray-800 text-white' : 'bg-white border-gray-200 text-gray-900'
+                          }`}
+                        >
+                          <option>Semua Workbook</option>
+                          <option>Tugas Kuliah</option>
+                          <option>Skripsi</option>
+                          <option>Jurnal</option>
+                        </select>
+                        <ChevronRight size={14} className="absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-gray-400 pointer-events-none" />
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            const blob = new Blob([content], { type: 'application/msword' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${docName}.doc`;
+                            a.click();
+                          }}
+                          className={`p-3 rounded-xl border hover:bg-gray-50 transition-colors ${
+                            theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-400' : 'bg-white border-gray-200 text-gray-600'
+                          }`}
+                        >
+                          <Download size={18} />
+                        </button>
+                        <button 
+                          className={`p-3 rounded-xl border hover:bg-gray-50 transition-colors ${
+                            theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-400' : 'bg-white border-gray-200 text-gray-600'
+                          }`}
+                        >
+                          <Save size={18} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className={`flex-1 rounded-2xl border flex flex-col overflow-hidden ${
+                      theme === 'dark' ? 'bg-[#111111] border-gray-800' : 'bg-white border-gray-200 shadow-sm'
+                    }`}>
+                      {/* Editor Area */}
+                      <div className="flex-1 flex flex-col overflow-hidden">
+                        <style>{`
+                          .quill { height: 100%; display: flex; flex-direction: column; }
+                          .ql-toolbar { 
+                            background: ${theme === 'dark' ? '#1F2937' : '#F9FAFB'} !important; 
+                            border: none !important; 
+                            border-bottom: 1px solid ${theme === 'dark' ? '#374151' : '#E5E7EB'} !important;
+                          }
+                          .ql-container { 
+                            border: none !important; 
+                            flex: 1; 
+                            overflow-y: auto; 
+                            background: ${theme === 'dark' ? '#111827' : '#FFFFFF'}; 
+                            color: ${theme === 'dark' ? '#E5E7EB' : '#374151'}; 
+                          }
+                          .ql-editor { padding: 32px !important; min-height: 100%; }
+                          .ql-snow .ql-stroke { stroke: ${theme === 'dark' ? '#9CA3AF' : '#4B5563'} !important; }
+                          .ql-snow .ql-fill { fill: ${theme === 'dark' ? '#9CA3AF' : '#4B5563'} !important; }
+                          .ql-snow .ql-picker { color: ${theme === 'dark' ? '#9CA3AF' : '#4B5563'} !important; }
+                        `}</style>
+
+                        <EditorErrorBoundary>
+                          <ReactQuill 
+                            theme="snow"
+                            value={content}
+                            onChange={(value) => setContent(value)}
+                            placeholder="Hasil generate akan muncul di sini..."
+                            modules={editorModules}
+                          />
+                        </EditorErrorBoundary>
+                      </div>
+
+                      {/* Footer */}
+                      <div className={`p-4 border-t flex items-center justify-between text-[10px] font-bold uppercase tracking-wider ${
+                        theme === 'dark' ? 'border-gray-800 bg-[#111111] text-gray-500' : 'border-gray-100 bg-gray-50 text-gray-400'
+                      }`}>
+                        <div>Total Words: {content ? content.replace(/<[^>]*>/g, '').split(/\s+/).filter(Boolean).length : 0}</div>
+                        <div className="flex items-center gap-4">
+                          <button 
+                            onClick={exportText}
+                            className="text-blue-600 hover:underline"
+                          >
+                            Export TXT
+                          </button>
+                          <button 
+                            onClick={() => {
+                              if (!content) return;
+                              const blob = new Blob([content.replace(/<[^>]*>/g, '')], { type: 'application/msword' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `${docName}.doc`;
+                              a.click();
+                            }}
+                            className="text-blue-600 hover:underline"
+                          >
+                            Ubah ke Word
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <form onSubmit={handleGenerateTool} className="space-y-6">
-                    <div>
-                      <label className={`block text-sm font-bold mb-2 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-700'}`}>
-                        Input Pertanyaan / Topik
-                      </label>
-                      <textarea 
-                        value={toolInput}
-                        onChange={(e) => setToolInput(e.target.value)}
-                        placeholder="Contoh: Bagaimana cara membuat kerangka berpikir untuk penelitian tentang AI di pendidikan?"
-                        className={`w-full p-4 rounded-xl border-none focus:ring-2 focus:ring-blue-100 transition-all min-h-[150px] text-sm ${
-                          theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500' : 'bg-gray-50 text-gray-900'
-                        }`}
-                      />
-                    </div>
-                    <button 
-                      type="submit"
-                      disabled={!toolInput.trim() || isToolLoading}
-                      className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-                    >
-                      {isToolLoading ? 'Sedang Memproses...' : 'Generate Sekarang'}
-                      {!isToolLoading && <Sparkles size={18} />}
+                  {/* Floating Action Button */}
+                  <div className="fixed bottom-8 right-8 z-30">
+                    <button className="w-12 h-12 bg-blue-600 text-white rounded-xl shadow-xl flex items-center justify-center hover:scale-110 transition-transform">
+                      <ChevronRight size={24} className="-rotate-90" />
                     </button>
-                  </form>
-
-                  {toolOutput && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`mt-10 p-8 rounded-2xl border ${
-                        theme === 'dark' ? 'bg-gray-800/50 border-gray-700' : 'bg-blue-50/50 border-blue-100'
-                      }`}
-                    >
-                      <div className="flex justify-between items-center mb-6">
-                        <h3 className={`font-bold flex items-center gap-2 ${theme === 'dark' ? 'text-white' : 'text-blue-900'}`}>
-                          <Sparkles size={20} className="text-blue-600" />
-                          Hasil Generate
-                        </h3>
-                        <button 
-                          onClick={() => {
-                            navigator.clipboard.writeText(toolOutput);
-                            alert('Hasil disalin!');
-                          }}
-                          className="text-xs font-bold text-blue-600 hover:underline"
-                        >
-                          Salin Hasil
-                        </button>
-                      </div>
-                      <div className={`text-sm leading-relaxed whitespace-pre-wrap ${theme === 'dark' ? 'text-gray-300' : 'text-gray-800'}`}>
-                        {toolOutput}
-                      </div>
-                    </motion.div>
-                  )}
+                  </div>
                 </div>
               ) : (
                 <>
@@ -894,13 +1387,22 @@ export default function App() {
                 theme === 'dark' ? 'bg-[#0A0A0A]' : 'bg-[#F8F9FA]'
               }`}>
                 {chatMessages.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
+                  <div className="h-full flex flex-col items-center justify-center text-center max-w-2xl mx-auto">
                     <div className="w-20 h-20 bg-blue-50 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-blue-600 mb-6">
                       <Bot size={40} />
                     </div>
-                    <h3 className={`text-xl font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Halo, {user.displayName}!</h3>
-                    <p className="text-gray-500">Saya adalah asisten AI BimTEKs.ID. Ada yang bisa saya bantu terkait tugas akademik atau penelitian Anda hari ini?</p>
-                    <div className="grid grid-cols-1 gap-3 mt-8 w-full">
+                    <h3 className={`text-xl font-bold mb-2 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Halo! 👋</h3>
+                    <p className={`mb-4 px-4 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                      Saya adalah <strong>Chatbot Akademik</strong> dari BimTEKs.ID. Ada yang bisa saya bantu terkait skripsi, makalah, proposal penelitian, kerangka berpikir, atau tugas akademik Anda hari ini? Cukup ketikkan pertanyaan Anda, dan saya bantu langsung 😊
+                    </p>
+                    
+                    <div className={`p-4 rounded-2xl border mb-8 text-sm leading-relaxed ${
+                      theme === 'dark' ? 'bg-blue-900/10 border-blue-900/30 text-blue-300' : 'bg-blue-50 border-blue-100 text-blue-700'
+                    }`}>
+                      🔥 <strong>Chatbot Akademik</strong> — GRATIS untuk semua pengguna! Bantu kamu membuat skripsi, makalah, proposal, kuesioner, kerangka berpikir, presentasi PPT, hingga analisis teori. Lebih lengkap dari AI berbayar, lebih cepat dari dosen pembimbing, dan selalu tersedia 24 jam. Mulai tanya sekarang dan rasakan kemudahannya! 🚀
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
                       <button onClick={() => setChatInput("Bagaimana cara membuat kerangka berpikir yang baik?")} className={`p-3 border rounded-xl text-sm transition-all text-left ${
                         theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-400 hover:border-blue-600 hover:text-blue-600' : 'bg-white border-gray-100 text-gray-600 hover:border-blue-200 hover:text-blue-600'
                       }`}>
@@ -910,6 +1412,16 @@ export default function App() {
                         theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-400 hover:border-blue-600 hover:text-blue-600' : 'bg-white border-gray-100 text-gray-600 hover:border-blue-200 hover:text-blue-600'
                       }`}>
                         "Bantu saya mencari ide judul skripsi tentang AI."
+                      </button>
+                      <button onClick={() => setChatInput("Buatkan outline untuk proposal penelitian kualitatif.")} className={`p-3 border rounded-xl text-sm transition-all text-left ${
+                        theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-400 hover:border-blue-600 hover:text-blue-600' : 'bg-white border-gray-100 text-gray-600 hover:border-blue-200 hover:text-blue-600'
+                      }`}>
+                        "Buatkan outline untuk proposal penelitian kualitatif."
+                      </button>
+                      <button onClick={() => setChatInput("Apa saja fitur yang tersedia di BimTEKs.ID?")} className={`p-3 border rounded-xl text-sm transition-all text-left ${
+                        theme === 'dark' ? 'bg-[#111111] border-gray-800 text-gray-400 hover:border-blue-600 hover:text-blue-600' : 'bg-white border-gray-100 text-gray-600 hover:border-blue-200 hover:text-blue-600'
+                      }`}>
+                        "Apa saja fitur yang tersedia di BimTEKs.ID?"
                       </button>
                     </div>
                   </div>
@@ -1013,15 +1525,35 @@ export default function App() {
                       theme === 'dark' ? 'bg-gray-800 text-white' : 'bg-white shadow-sm'
                     }`}
                   />
+                  {(historyFilter || historyDateFilter) && (
+                    <button 
+                      onClick={() => {
+                        setHistoryFilter('');
+                        setHistoryDateFilter('');
+                      }}
+                      className="text-xs font-bold text-red-500 hover:underline px-2"
+                    >
+                      Reset Filter
+                    </button>
+                  )}
                 </div>
               </div>
 
               <div className="space-y-4">
                 {generations
-                  .filter(gen => 
-                    gen.tool.toLowerCase().includes(historyFilter.toLowerCase()) &&
-                    (!historyDateFilter || (gen.timestamp?.toDate().toISOString().split('T')[0] === historyDateFilter))
-                  )
+                  .filter(gen => {
+                    const matchesTool = gen.tool.toLowerCase().includes(historyFilter.toLowerCase());
+                    let matchesDate = true;
+                    if (historyDateFilter && gen.timestamp) {
+                      try {
+                        const genDate = gen.timestamp.toDate().toISOString().split('T')[0];
+                        matchesDate = genDate === historyDateFilter;
+                      } catch (e) {
+                        matchesDate = false;
+                      }
+                    }
+                    return matchesTool && matchesDate;
+                  })
                   .map((gen) => (
                     <motion.div 
                       key={gen.id}
@@ -1045,15 +1577,22 @@ export default function App() {
                             </p>
                           </div>
                         </div>
-                        <button 
-                          onClick={() => {
-                            navigator.clipboard.writeText(gen.content);
-                            alert('Konten disalin ke clipboard!');
-                          }}
-                          className="text-xs font-bold text-blue-600 hover:underline"
-                        >
-                          Salin Teks
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button 
+                            onClick={() => {
+                              navigator.clipboard.writeText(gen.content);
+                            }}
+                            className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
+                          >
+                            Salin Teks
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteGeneration(gen.id)}
+                            className="text-xs font-bold text-red-500 hover:underline flex items-center gap-1"
+                          >
+                            Hapus
+                          </button>
+                        </div>
                       </div>
                       <div className={`text-sm leading-relaxed line-clamp-3 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'}`}>
                         {gen.content}
@@ -1074,63 +1613,206 @@ export default function App() {
           ) : activeTab === 'Pengaturan' ? (
             <div className="p-8 max-w-4xl mx-auto">
               <div className="mb-8">
-                <h1 className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Pengaturan</h1>
+                <h1 className={`text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Pengaturan</h1>
                 <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
                   <Home size={12} />
                   <span>Panel AI</span>
                   <ChevronRight size={12} />
-                  <span className="text-blue-600">Pengaturan</span>
+                  <span className="text-blue-600 font-bold uppercase tracking-wider">Pengaturan</span>
                 </div>
               </div>
 
-              <div className={`rounded-2xl border overflow-hidden ${
-                theme === 'dark' ? 'bg-[#111111] border-gray-800' : 'bg-white border-gray-100 shadow-sm'
+              <div className={`rounded-3xl border overflow-hidden ${
+                theme === 'dark' ? 'bg-[#111111] border-gray-800' : 'bg-white border-gray-100 shadow-xl'
               }`}>
-                <div className="p-8 space-y-8">
+                <div className="p-10 space-y-10">
+                  {/* TAMPILAN */}
                   <section>
-                    <h3 className={`text-sm font-bold uppercase tracking-widest mb-6 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Tampilan</h3>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                          theme === 'dark' ? 'bg-gray-800 text-yellow-400' : 'bg-gray-100 text-gray-600'
-                        }`}>
-                          {theme === 'dark' ? <Moon size={24} /> : <Sun size={24} />}
+                    <h3 className={`text-xs font-black uppercase tracking-[0.2em] mb-8 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Tampilan</h3>
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-yellow-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            {theme === 'dark' ? <Moon size={24} /> : <Sun size={24} />}
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Mode Gelap</p>
+                            <p className="text-sm text-gray-500">Ubah tampilan aplikasi menjadi gelap atau terang.</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className={`font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Mode Gelap</p>
-                          <p className="text-sm text-gray-500">Ubah tampilan aplikasi menjadi gelap atau terang.</p>
-                        </div>
+                        <button 
+                          onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                          className={`w-14 h-7 rounded-full relative transition-all duration-500 ${
+                            theme === 'dark' ? 'bg-blue-600' : 'bg-gray-200'
+                          }`}
+                        >
+                          <div className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow-lg transition-all duration-500 ${
+                            theme === 'dark' ? 'left-8' : 'left-1'
+                          }`} />
+                        </button>
                       </div>
-                      <button 
-                        onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-                        className={`w-14 h-7 rounded-full relative transition-all duration-300 ${
-                          theme === 'dark' ? 'bg-blue-600' : 'bg-gray-200'
-                        }`}
-                      >
-                        <div className={`absolute top-1 w-5 h-5 bg-white rounded-full transition-all duration-300 ${
-                          theme === 'dark' ? 'left-8' : 'left-1'
-                        }`} />
-                      </button>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            <Languages size={24} />
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Bahasa Aplikasi</p>
+                            <p className="text-sm text-gray-500">Pilih bahasa antarmuka aplikasi.</p>
+                          </div>
+                        </div>
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-bold ${
+                          theme === 'dark' ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'
+                        }`}>Indonesia</span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            <Type size={24} />
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Ukuran Teks</p>
+                            <p className="text-sm text-gray-500">Sesuaikan ukuran teks untuk kenyamanan membaca.</p>
+                          </div>
+                        </div>
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-bold ${
+                          theme === 'dark' ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'
+                        }`}>Sedang</span>
+                      </div>
                     </div>
                   </section>
 
                   <div className={`h-px ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'}`} />
 
+                  {/* MODEL AI */}
                   <section>
-                    <h3 className={`text-sm font-bold uppercase tracking-widest mb-6 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>Model AI</h3>
+                    <h3 className={`text-xs font-black uppercase tracking-[0.2em] mb-8 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Model AI</h3>
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            <Sparkles size={24} />
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Model Standar</p>
+                            <p className="text-sm text-gray-500">Menggunakan model AI standar untuk penulisan akademik.</p>
+                          </div>
+                        </div>
+                        <span className="px-4 py-1.5 bg-green-100 text-green-600 text-xs font-bold rounded-full">Aktif</span>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            <Bot size={24} />
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>AI Academic Mode</p>
+                            <p className="text-sm text-gray-500">Mode akademik untuk skripsi, proposal, dan makalah.</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setAcademicMode(!academicMode)}
+                          className={`w-14 h-7 rounded-full relative transition-all duration-500 ${
+                            academicMode ? 'bg-blue-600' : 'bg-gray-200'
+                          }`}
+                        >
+                          <div className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow-lg transition-all duration-500 ${
+                            academicMode ? 'left-8' : 'left-1'
+                          }`} />
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <div className={`h-px ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'}`} />
+
+                  {/* AKADEMIK */}
+                  <section>
+                    <h3 className={`text-xs font-black uppercase tracking-[0.2em] mb-8 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Akademik</h3>
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            <ShieldCheck size={24} />
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Pengecekan Plagiarisme</p>
+                            <p className="text-sm text-gray-500">Periksa tingkat kemiripan tulisan akademik.</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setPlagiarism(!plagiarism)}
+                          className={`w-14 h-7 rounded-full relative transition-all duration-500 ${
+                            plagiarism ? 'bg-blue-600' : 'bg-gray-200'
+                          }`}
+                        >
+                          <div className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow-lg transition-all duration-500 ${
+                            plagiarism ? 'left-8' : 'left-1'
+                          }`} />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-5">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                            theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            <Share2 size={24} />
+                          </div>
+                          <div>
+                            <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Ide Penelitian Interdisipliner</p>
+                            <p className="text-sm text-gray-500">Gabungkan ide dari berbagai bidang ilmu.</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setInterdisciplinary(!interdisciplinary)}
+                          className={`w-14 h-7 rounded-full relative transition-all duration-500 ${
+                            interdisciplinary ? 'bg-blue-600' : 'bg-gray-200'
+                          }`}
+                        >
+                          <div className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow-lg transition-all duration-500 ${
+                            interdisciplinary ? 'left-8' : 'left-1'
+                          }`} />
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <div className={`h-px ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'}`} />
+
+                  {/* SISTEM */}
+                  <section>
+                    <h3 className={`text-xs font-black uppercase tracking-[0.2em] mb-8 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>Sistem</h3>
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                          theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-gray-100 text-blue-600'
+                      <div className="flex items-center gap-5">
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                          theme === 'dark' ? 'bg-gray-800 text-blue-400' : 'bg-blue-50 text-blue-600'
                         }`}>
-                          <Sparkles size={24} />
+                          <Info size={24} />
                         </div>
                         <div>
-                          <p className={`font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Model Standar</p>
-                          <p className="text-sm text-gray-500">Menggunakan Gemini 3 Flash untuk performa optimal.</p>
+                          <p className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Versi Aplikasi</p>
+                          <p className="text-sm text-gray-500">Aplikasi masih dalam tahap pengembangan.</p>
                         </div>
                       </div>
-                      <span className="px-3 py-1 bg-green-100 text-green-600 text-xs font-bold rounded-full">Aktif</span>
+                      <span className={`px-4 py-1.5 rounded-full text-xs font-bold ${
+                        theme === 'dark' ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'
+                      }`}>v1.0 Beta</span>
                     </div>
                   </section>
                 </div>
