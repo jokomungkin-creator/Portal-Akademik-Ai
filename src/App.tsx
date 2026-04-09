@@ -72,6 +72,7 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { sendMessage as sendGeminiMessage } from './services/geminiService';
+import { Login } from './components/Login';
 
 enum OperationType {
   CREATE = 'create',
@@ -144,6 +145,7 @@ class EditorErrorBoundary extends Component<any, any> {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
@@ -405,10 +407,21 @@ export default function App() {
   }, []);
 
   const handleLogin = async () => {
+    if (isLoggingIn) return;
+    
+    setIsLoggingIn(true);
     try {
       await signInWithGoogle();
-    } catch (error) {
-      console.error("Login failed", error instanceof Error ? error.message : String(error));
+    } catch (error: any) {
+      if (error.code === 'auth/cancelled-popup-request') {
+        console.log("Popup request was cancelled by a new request or user action.");
+      } else if (error.code === 'auth/popup-closed-by-user') {
+        console.log("User closed the login popup.");
+      } else {
+        console.error("Login failed", error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -433,122 +446,7 @@ export default function App() {
   }
 
   if (!user) {
-    return (
-      <div className="min-h-screen bg-white font-sans">
-        {/* Navigation Header */}
-        <header className="h-20 bg-white border-b border-gray-100 flex items-center justify-between px-8 md:px-16 sticky top-0 z-50">
-          <div className="flex items-center gap-2">
-            <div className="bg-black text-white px-3 py-1 rounded-md font-bold text-xl flex items-center gap-1">
-              <span>BIMTEKS</span>
-              <div className="bg-blue-500 w-6 h-6 rounded-full flex items-center justify-center text-[10px]">
-                AI
-              </div>
-            </div>
-          </div>
-
-          <nav className="hidden md:flex items-center gap-8">
-            <a href="#" className="text-gray-900 font-semibold border-b-2 border-black pb-1">Home</a>
-            <button onClick={handleLogin} className="text-gray-900 font-semibold hover:text-blue-600 transition-colors">Dashboard</button>
-          </nav>
-
-          <button 
-            onClick={handleLogin}
-            className="bg-[#00C192] hover:bg-[#00A87F] text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-[#00C192]/20"
-          >
-            <LogIn size={18} />
-            Login
-          </button>
-        </header>
-
-        {/* Hero Section */}
-        <section className="relative bg-gradient-to-b from-[#001B3D] to-[#000D1F] pt-20 pb-40 px-6 overflow-hidden">
-          <div className="max-w-5xl mx-auto text-center relative z-10">
-            <motion.p 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-[#FFD700] font-bold tracking-widest mb-6"
-            >
-              BUNTU SAAT MENULIS?
-            </motion.p>
-
-            <motion.h1 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="text-4xl md:text-6xl font-extrabold text-[#00E5B0] leading-tight mb-8"
-            >
-              Cara Membuat Karya Tulis 10x<br />
-              Lebih Cepat dan Berkualitas! 🔥
-            </motion.h1>
-
-            <motion.p 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="text-[#FFA500] text-lg md:text-xl font-medium max-w-3xl mx-auto"
-            >
-              160+ Tools AI untuk membuat makalah, jurnal, skripsi, laporan, dll <span className="underline cursor-pointer hover:text-white transition-colors">dalam hitungan menit!</span>
-            </motion.p>
-
-            <motion.button
-              onClick={handleLogin}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.3 }}
-              className="mt-12 bg-[#00E5B0] text-[#001B3D] px-10 py-4 rounded-full font-black text-xl shadow-2xl shadow-[#00E5B0]/30 hover:bg-white transition-all active:scale-95 flex items-center gap-3 mx-auto"
-            >
-              Mulai Sekarang Gratis
-              <ChevronRight size={24} />
-            </motion.button>
-
-            {/* MacBook Mockup */}
-            <motion.div 
-              initial={{ opacity: 0, y: 40 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4, duration: 0.8 }}
-              className="mt-20 relative mx-auto max-w-4xl"
-            >
-              <div className="relative bg-gray-800 rounded-t-3xl p-2 shadow-2xl border-x-4 border-t-4 border-gray-700">
-                <div className="bg-white rounded-xl overflow-hidden aspect-video shadow-inner flex">
-                  {/* Sidebar Mockup */}
-                  <div className="w-48 bg-white border-r border-gray-100 hidden md:flex flex-col p-4 gap-4 text-left">
-                    <div className="h-4 bg-gray-100 rounded w-1/2 mb-2"></div>
-                    {[1, 2, 3, 4].map(i => (
-                      <div key={i} className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-gray-200 rounded"></div>
-                        <div className="h-2 bg-gray-50 rounded w-full"></div>
-                      </div>
-                    ))}
-                  </div>
-                  {/* Content Mockup */}
-                  <div className="flex-1 bg-gray-50 p-6 overflow-hidden">
-                    <div className="flex justify-between items-center mb-8">
-                      <div className="h-4 bg-gray-200 rounded w-32"></div>
-                      <div className="flex gap-2">
-                        <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
-                        <div className="w-6 h-6 bg-gray-200 rounded-full"></div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                      {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-                        <div key={i} className="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
-                          <div className="w-8 h-8 bg-blue-100 rounded mb-3"></div>
-                          <div className="h-3 bg-gray-200 rounded w-3/4 mb-2"></div>
-                          <div className="h-2 bg-gray-100 rounded w-full"></div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="h-4 bg-gray-700 rounded-b-xl w-full relative">
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-24 h-1 bg-gray-600 rounded-b-lg"></div>
-              </div>
-            </motion.div>
-          </div>
-        </section>
-      </div>
-    );
+    return <Login onLogin={handleLogin} isLoggingIn={isLoggingIn} />;
   }
 
   // Dashboard View
