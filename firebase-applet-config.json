@@ -1,10 +1,10 @@
 {
-  "projectId": "gen-lang-client-0200846885",
-  "appId": "1:939982371767:web:db4fcf62b9e6fc645f8632",
-  "apiKey": "AIzaSyCJAiLmIF_guCXmlHntS6iShhclE32dlZ4",
-  "authDomain": "gen-lang-client-0200846885.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-928a4693-2a19-4d80-85e7-fe87fb74bd1e",
-  "storageBucket": "gen-lang-client-0200846885.firebasestorage.app",
-  "messagingSenderId": "939982371767",
-  "measurementId": ""
+  "projectId": "bimteks-ai",
+  "appId": "1:206786469854:web:74e8a369cebf66b7ed874f",
+  "apiKey": "AIzaSyC8lWkpo-ke1coHxDhVO1859jPbeGWAHPM",
+  "authDomain": "bimteks-ai.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "bimteks-ai.firebasestorage.app",
+  "messagingSenderId": "206786469854",
+  "measurementId": "G-2Q68NCZT00"
 }
